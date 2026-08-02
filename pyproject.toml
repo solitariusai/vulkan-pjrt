@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vulkan-pjrt"
+version = "0.1.0"
+description = "Native Vulkan PJRT plugin for JAX and OpenXLA compute acceleration on Vulkan GPUs"
+readme = "README.md"
+requires-python = ">=3.12"
+authors = [
+    { name = "Vulkan PJRT Team" }
+]
+keywords = ["vulkan", "pjrt", "jax", "openxla", "gpu", "spir-v", "deep-learning"]
+license = { text = "Apache-2.0" }
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: C++",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies = [
+    "numpy>=1.22.0",
+    "jax>=0.4.0",
+]
+
+[project.entry-points."jax_plugins"]
+vulkan = "vulkan_pjrt"
+
+[project.urls]
+Homepage = "https://github.com/shinapri/vulkan-pjrt"
+Repository = "https://github.com/shinapri/vulkan-pjrt"
