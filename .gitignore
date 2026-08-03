@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Built shared libraries
+*.so
+vulkan_pjrt/*.so

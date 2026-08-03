@@ -35,6 +35,15 @@ size_t GetElementTypeSize(PJRT_Buffer_Type type) {
 VulkanBufferImpl::VulkanBufferImpl(const VulkanDevice* dev, PJRT_Buffer_Type type,
                                    const int64_t* dimensions, size_t num_dims)
     : device(dev), element_type(type) {
+  if (!device) {
+    static auto fallback_dev = []() {
+      auto d = std::make_unique<VulkanDevice>();
+      d->Initialize(0);
+      return d;
+    }();
+    device = fallback_dev.get();
+  }
+
   size_t elem_size = GetElementTypeSize(type);
   size_t num_elements = 1;
   dims.assign(dimensions, dimensions + num_dims);
@@ -58,11 +67,11 @@ VulkanBufferImpl::VulkanBufferImpl(const VulkanDevice* dev, PJRT_Buffer_Type typ
 
   size_in_bytes = num_elements * elem_size;
 
-  // Allocate GPU buffer (Device Local + Transfer Src/Dst + Storage Buffer)
+  // Allocate GPU buffer (Host Visible + Host Coherent + Storage Buffer)
   device->CreateBuffer(
       size_in_bytes,
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-      VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
       vk_buffer, vk_memory);
 }
 
@@ -79,50 +88,24 @@ VulkanBufferImpl::~VulkanBufferImpl() {
 
 void VulkanBufferImpl::CopyFromHost(const void* host_data, size_t host_size_bytes) {
   if (host_size_bytes == 0 || !host_data) return;
-
-  // Create staging buffer (Host Visible + Host Coherent)
-  VkBuffer staging_buffer;
-  VkDeviceMemory staging_memory;
-  device->CreateBuffer(
-      host_size_bytes, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
-      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-      staging_buffer, staging_memory);
+  size_t copy_size = std::min(size_in_bytes, host_size_bytes);
 
   void* mapped = nullptr;
-  vkMapMemory(device->device, staging_memory, 0, host_size_bytes, 0, &mapped);
-  std::memcpy(mapped, host_data, host_size_bytes);
-  vkUnmapMemory(device->device, staging_memory);
-
-  // Copy staging buffer -> GPU device buffer
-  device->CopyBuffer(staging_buffer, vk_buffer, std::min(size_in_bytes, host_size_bytes));
-
-  vkDestroyBuffer(device->device, staging_buffer, nullptr);
-  vkFreeMemory(device->device, staging_memory, nullptr);
+  if (vkMapMemory(device->device, vk_memory, 0, copy_size, 0, &mapped) == VK_SUCCESS) {
+    std::memcpy(mapped, host_data, copy_size);
+    vkUnmapMemory(device->device, vk_memory);
+  }
 }
 
 void VulkanBufferImpl::CopyToHost(void* host_data, size_t host_size_bytes) const {
   if (host_size_bytes == 0 || !host_data) return;
-
   size_t copy_size = std::min(size_in_bytes, host_size_bytes);
 
-  // Create staging buffer (Host Visible + Host Coherent)
-  VkBuffer staging_buffer;
-  VkDeviceMemory staging_memory;
-  device->CreateBuffer(
-      copy_size, VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-      VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-      staging_buffer, staging_memory);
-
-  // Copy GPU device buffer -> staging buffer
-  device->CopyBuffer(vk_buffer, staging_buffer, copy_size);
-
   void* mapped = nullptr;
-  vkMapMemory(device->device, staging_memory, 0, copy_size, 0, &mapped);
-  std::memcpy(host_data, mapped, copy_size);
-  vkUnmapMemory(device->device, staging_memory);
-
-  vkDestroyBuffer(device->device, staging_buffer, nullptr);
-  vkFreeMemory(device->device, staging_memory, nullptr);
+  if (vkMapMemory(device->device, vk_memory, 0, copy_size, 0, &mapped) == VK_SUCCESS) {
+    std::memcpy(host_data, mapped, copy_size);
+    vkUnmapMemory(device->device, vk_memory);
+  }
 }
 
 }  // namespace vulkan_pjrt

@@ -40,4 +40,8 @@ struct PJRT_LoadedExecutable {
   std::unique_ptr<vulkan_pjrt::VulkanExecutableImpl> impl;
 };
 
+struct PJRT_Executable {
+  vulkan_pjrt::VulkanExecutableImpl* impl{nullptr};
+};
+
 #endif  // VULKAN_EXECUTABLE_H_

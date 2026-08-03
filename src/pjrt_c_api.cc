@@ -337,14 +337,134 @@ PJRT_Error* Impl_PJRT_Client_Compile(PJRT_Client_Compile_Args* args) {
     format.assign(args->program->format, args->program->format_size);
   }
 
+  std::cout << "[PJRT Plugin Compile] Format: " << format << ", Code length: " << code.size() << std::endl;
+  if (!code.empty()) {
+    std::cout << "[PJRT MLIR Payload Snippet]:\n" << code.substr(0, std::min<size_t>(code.size(), 300)) << std::endl;
+  }
   PJRT_LoadedExecutable* exec = new PJRT_LoadedExecutable();
   try {
     exec->impl = std::make_unique<vulkan_pjrt::VulkanExecutableImpl>(
         args->client->impl->device.get(), code, format);
-  } catch (...) {
+  } catch (const std::exception& e) {
+    std::cerr << "[CPP Compile Error] " << e.what() << std::endl;
   }
 
   if (args) args->executable = exec;
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_LoadedExecutable_GetExecutable(PJRT_LoadedExecutable_GetExecutable_Args* args) {
+  if (!args || !args->loaded_executable) return CreateError(PJRT_Error_Code_INVALID_ARGUMENT, "Null executable");
+  PJRT_Executable* exec = new PJRT_Executable();
+  exec->impl = args->loaded_executable->impl.get();
+  args->executable = exec;
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_LoadedExecutable_AddressableDevices(PJRT_LoadedExecutable_AddressableDevices_Args* args) {
+  if (!args || !args->executable) return CreateError(PJRT_Error_Code_INVALID_ARGUMENT, "Null executable");
+  args->addressable_devices = nullptr;
+  args->num_addressable_devices = 0;
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_LoadedExecutable_Delete(PJRT_LoadedExecutable_Delete_Args* args) {
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_LoadedExecutable_IsDeleted(PJRT_LoadedExecutable_IsDeleted_Args* args) {
+  if (args) args->is_deleted = false;
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_Executable_Destroy(PJRT_Executable_Destroy_Args* args) {
+  if (args && args->executable) delete args->executable;
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_Executable_Name(PJRT_Executable_Name_Args* args) {
+  if (!args) return CreateError(PJRT_Error_Code_INVALID_ARGUMENT, "Null args");
+  static const char* name = "vulkan_executable";
+  args->executable_name = name;
+  args->executable_name_size = std::strlen(name);
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_Executable_NumReplicas(PJRT_Executable_NumReplicas_Args* args) {
+  if (args) args->num_replicas = 1;
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_Executable_NumPartitions(PJRT_Executable_NumPartitions_Args* args) {
+  if (args) args->num_partitions = 1;
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_Executable_NumOutputs(PJRT_Executable_NumOutputs_Args* args) {
+  if (!args) return CreateError(PJRT_Error_Code_INVALID_ARGUMENT, "Null args");
+  args->num_outputs = (args->executable && args->executable->impl) ? args->executable->impl->num_outputs : 1;
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_Executable_SizeOfGeneratedCodeInBytes(PJRT_Executable_SizeOfGeneratedCodeInBytes_Args* args) {
+  if (args) args->size_in_bytes = 0;
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_Executable_GetCostAnalysis(PJRT_Executable_GetCostAnalysis_Args* args) {
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_Executable_OptimizedProgram(PJRT_Executable_OptimizedProgram_Args* args) {
+  if (args && args->program) {
+    args->program->code_size = 0;
+  }
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_Executable_Serialize(PJRT_Executable_Serialize_Args* args) {
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_LoadedExecutable_AddressableDeviceLogicalIds(PJRT_LoadedExecutable_AddressableDeviceLogicalIds_Args* args) {
+  if (args) {
+    args->addressable_device_logical_ids = nullptr;
+    args->num_addressable_device_logical_ids = 0;
+  }
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_LoadedExecutable_Fingerprint(PJRT_LoadedExecutable_Fingerprint_Args* args) {
+  if (args) {
+    args->executable_fingerprint = nullptr;
+    args->executable_fingerprint_size = 0;
+  }
+  return nullptr;
+}
+
+static void DummyDeviceAssignmentDeleter(PJRT_DeviceAssignmentSerialized* da) {}
+
+PJRT_Error* Impl_PJRT_LoadedExecutable_GetDeviceAssignment(PJRT_LoadedExecutable_GetDeviceAssignment_Args* args) {
+  if (args) {
+    static const char empty_da[] = "";
+    args->serialized_bytes = empty_da;
+    args->serialized_bytes_size = 0;
+    args->serialized_device_assignment = nullptr;
+    args->serialized_device_assignment_deleter = DummyDeviceAssignmentDeleter;
+  }
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_Executable_OutputMemoryKinds(PJRT_Executable_OutputMemoryKinds_Args* args) {
+  if (args) {
+    static const char* default_kind = "device";
+    static const size_t default_kind_size = 6;
+    static const char* kinds[1] = { default_kind };
+    static const size_t kind_sizes[1] = { default_kind_size };
+    args->memory_kinds = kinds;
+    args->memory_kind_sizes = kind_sizes;
+    args->num_outputs = 1;
+  }
   return nullptr;
 }
 
@@ -352,14 +472,25 @@ PJRT_Error* Impl_PJRT_Client_BufferFromHostBuffer(PJRT_Client_BufferFromHostBuff
   if (!args || !args->data) return CreateError(PJRT_Error_Code_INVALID_ARGUMENT, "Invalid BufferFromHostBuffer args");
 
   try {
-    const vulkan_pjrt::VulkanDevice* dev = args->client ? args->client->impl->device.get() : nullptr;
+    const vulkan_pjrt::VulkanDevice* dev = nullptr;
+    PJRT_Device* device_handle_ptr = nullptr;
+    PJRT_Memory* memory_handle_ptr = nullptr;
+
+    if (args->client && args->client->impl) {
+      dev = args->client->impl->device.get();
+      device_handle_ptr = &args->client->device_handle;
+      memory_handle_ptr = args->client->device_handle.memory.get();
+    } else if (args->device) {
+      dev = args->device->device;
+      device_handle_ptr = args->device;
+      memory_handle_ptr = args->device->memory.get();
+    }
+
     auto buf_impl = std::make_unique<vulkan_pjrt::VulkanBufferImpl>(
         dev, (PJRT_Buffer_Type)args->type, args->dims, args->num_dims);
 
-    if (args->client) {
-      buf_impl->device_ptr = &args->client->device_handle;
-      buf_impl->memory_ptr = args->client->device_handle.memory.get();
-    }
+    if (device_handle_ptr) buf_impl->device_ptr = device_handle_ptr;
+    if (memory_handle_ptr) buf_impl->memory_ptr = memory_handle_ptr;
 
     buf_impl->CopyFromHost(args->data, buf_impl->size_in_bytes);
 
@@ -397,12 +528,20 @@ PJRT_Error* Impl_PJRT_LoadedExecutable_Execute(PJRT_LoadedExecutable_Execute_Arg
 
     auto result_bufs = args->executable->impl->Execute(argument_handles, num_args);
 
-    if (args->output_lists && args->output_lists[0] && !result_bufs.empty()) {
-      args->output_lists[0][0] = result_bufs[0];
+    if (args->output_lists) {
+      size_t num_devs = args->num_devices > 0 ? args->num_devices : 1;
+      for (size_t d = 0; d < num_devs; ++d) {
+        if (args->output_lists[d]) {
+          for (size_t i = 0; i < result_bufs.size(); ++i) {
+            args->output_lists[d][i] = result_bufs[i];
+          }
+        }
+      }
     }
 
     return nullptr;
   } catch (const std::exception& e) {
+    std::cerr << "[CPP Execute Error] " << e.what() << std::endl;
     return CreateError(PJRT_Error_Code_INTERNAL, std::string("Execution failed: ") + e.what());
   }
 }
@@ -489,6 +628,14 @@ PJRT_Error* Impl_PJRT_Buffer_Memory(PJRT_Buffer_Memory_Args* args) {
   return nullptr;
 }
 
+PJRT_Error* Impl_PJRT_Buffer_Delete(PJRT_Buffer_Delete_Args* args) {
+  return nullptr;
+}
+
+PJRT_Error* Impl_PJRT_Buffer_CopyToDevice(PJRT_Buffer_CopyToDevice_Args* args) {
+  return nullptr;
+}
+
 PJRT_Error* Impl_PJRT_Buffer_IsDeleted(PJRT_Buffer_IsDeleted_Args* args) {
   if (args) args->is_deleted = false;
   return nullptr;
@@ -545,6 +692,13 @@ PJRT_Error* Impl_PJRT_Event_OnReady(PJRT_Event_OnReady_Args* args) {
   return nullptr;
 }
 
+PJRT_Error* Impl_PJRT_Client_DefaultDeviceAssignment(PJRT_Client_DefaultDeviceAssignment_Args* args) {
+  if (args && args->default_assignment && args->num_replicas * args->num_partitions > 0) {
+    std::memset(args->default_assignment, 0, sizeof(int) * args->num_replicas * args->num_partitions);
+  }
+  return nullptr;
+}
+
 static const PJRT_Api g_pjrt_api = []() {
   PJRT_Api api;
   std::memset(&api, 0, sizeof(api));
@@ -597,6 +751,27 @@ static const PJRT_Api g_pjrt_api = []() {
   api.PJRT_Memory_ToString = Impl_PJRT_Memory_ToString;
   api.PJRT_Memory_AddressableByDevices = Impl_PJRT_Memory_AddressableByDevices;
 
+  api.PJRT_Executable_Destroy = Impl_PJRT_Executable_Destroy;
+  api.PJRT_Executable_Name = Impl_PJRT_Executable_Name;
+  api.PJRT_Executable_NumReplicas = Impl_PJRT_Executable_NumReplicas;
+  api.PJRT_Executable_NumPartitions = Impl_PJRT_Executable_NumPartitions;
+  api.PJRT_Executable_NumOutputs = Impl_PJRT_Executable_NumOutputs;
+  api.PJRT_Executable_SizeOfGeneratedCodeInBytes = Impl_PJRT_Executable_SizeOfGeneratedCodeInBytes;
+  api.PJRT_Executable_GetCostAnalysis = Impl_PJRT_Executable_GetCostAnalysis;
+  api.PJRT_Executable_OutputMemoryKinds = Impl_PJRT_Executable_OutputMemoryKinds;
+  api.PJRT_Executable_OptimizedProgram = Impl_PJRT_Executable_OptimizedProgram;
+  api.PJRT_Executable_Serialize = Impl_PJRT_Executable_Serialize;
+
+  api.PJRT_LoadedExecutable_Destroy = Impl_PJRT_LoadedExecutable_Destroy;
+  api.PJRT_LoadedExecutable_GetExecutable = Impl_PJRT_LoadedExecutable_GetExecutable;
+  api.PJRT_LoadedExecutable_AddressableDevices = Impl_PJRT_LoadedExecutable_AddressableDevices;
+  api.PJRT_LoadedExecutable_Delete = Impl_PJRT_LoadedExecutable_Delete;
+  api.PJRT_LoadedExecutable_IsDeleted = Impl_PJRT_LoadedExecutable_IsDeleted;
+  api.PJRT_LoadedExecutable_Execute = Impl_PJRT_LoadedExecutable_Execute;
+  api.PJRT_LoadedExecutable_Fingerprint = Impl_PJRT_LoadedExecutable_Fingerprint;
+  api.PJRT_LoadedExecutable_GetDeviceAssignment = Impl_PJRT_LoadedExecutable_GetDeviceAssignment;
+  api.PJRT_LoadedExecutable_AddressableDeviceLogicalIds = Impl_PJRT_LoadedExecutable_AddressableDeviceLogicalIds;
+
   api.PJRT_Buffer_Destroy = Impl_PJRT_Buffer_Destroy;
   api.PJRT_Buffer_ElementType = Impl_PJRT_Buffer_ElementType;
   api.PJRT_Buffer_Dimensions = Impl_PJRT_Buffer_Dimensions;
@@ -607,13 +782,12 @@ static const PJRT_Api g_pjrt_api = []() {
   api.PJRT_Buffer_ToHostBuffer = Impl_PJRT_Buffer_ToHostBuffer;
   api.PJRT_Buffer_Device = Impl_PJRT_Buffer_Device;
   api.PJRT_Buffer_Memory = Impl_PJRT_Buffer_Memory;
+  api.PJRT_Buffer_Delete = Impl_PJRT_Buffer_Delete;
   api.PJRT_Buffer_IsDeleted = Impl_PJRT_Buffer_IsDeleted;
+  api.PJRT_Buffer_CopyToDevice = Impl_PJRT_Buffer_CopyToDevice;
   api.PJRT_Buffer_IsOnCpu = Impl_PJRT_Buffer_IsOnCpu;
   api.PJRT_Buffer_ReadyEvent = Impl_PJRT_Buffer_ReadyEvent;
   api.PJRT_Buffer_UnsafePointer = Impl_PJRT_Buffer_UnsafePointer;
-
-  api.PJRT_LoadedExecutable_Destroy = Impl_PJRT_LoadedExecutable_Destroy;
-  api.PJRT_LoadedExecutable_Execute = Impl_PJRT_LoadedExecutable_Execute;
 
   api.PJRT_Event_Destroy = Impl_PJRT_Event_Destroy;
   api.PJRT_Event_IsReady = Impl_PJRT_Event_IsReady;

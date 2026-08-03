@@ -55,6 +55,8 @@ class PJRT_Api_Version(ctypes.Structure):
 
 class PJRT_Program(ctypes.Structure):
     _fields_ = [
+        ("struct_size", ctypes.c_size_t),
+        ("extension_start", ctypes.c_void_p),
         ("code", ctypes.c_char_p),
         ("code_size", ctypes.c_size_t),
         ("format", ctypes.c_char_p),
@@ -65,7 +67,15 @@ class PJRT_Client_Create_Args(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_size_t),
         ("extension_start", ctypes.c_void_p),
-        ("client", ctypes.POINTER(ctypes.c_void_p)),
+        ("create_options", ctypes.c_void_p),
+        ("num_options", ctypes.c_size_t),
+        ("kv_get_callback", ctypes.c_void_p),
+        ("kv_get_user_arg", ctypes.c_void_p),
+        ("kv_put_callback", ctypes.c_void_p),
+        ("kv_put_user_arg", ctypes.c_void_p),
+        ("client", ctypes.c_void_p),
+        ("kv_try_get_callback", ctypes.c_void_p),
+        ("kv_try_get_user_arg", ctypes.c_void_p),
     ]
 
 class PJRT_Client_PlatformName_Args(ctypes.Structure):
@@ -81,6 +91,7 @@ class PJRT_Client_BufferFromHostBuffer_Args(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_size_t),
         ("extension_start", ctypes.c_void_p),
+        ("client", ctypes.c_void_p),
         ("data", ctypes.c_void_p),
         ("type", ctypes.c_int),
         ("dims", ctypes.POINTER(ctypes.c_int64)),
@@ -89,16 +100,18 @@ class PJRT_Client_BufferFromHostBuffer_Args(ctypes.Structure):
         ("num_byte_strides", ctypes.c_size_t),
         ("host_buffer_semantics", ctypes.c_int),
         ("device", ctypes.c_void_p),
+        ("memory", ctypes.c_void_p),
+        ("device_layout", ctypes.c_void_p),
         ("done_with_host_buffer", ctypes.c_void_p),
-        ("buffer", ctypes.POINTER(ctypes.c_void_p)),
-        ("client", ctypes.c_void_p),
+        ("buffer", ctypes.c_void_p),
     ]
 
 class PJRT_Buffer_ToHostBuffer_Args(ctypes.Structure):
     _fields_ = [
         ("struct_size", ctypes.c_size_t),
         ("extension_start", ctypes.c_void_p),
-        ("buffer", ctypes.c_void_p),
+        ("src", ctypes.c_void_p),
+        ("host_layout", ctypes.c_void_p),
         ("dst", ctypes.c_void_p),
         ("dst_size", ctypes.c_size_t),
         ("event", ctypes.c_void_p),
@@ -110,9 +123,9 @@ class PJRT_Client_Compile_Args(ctypes.Structure):
         ("extension_start", ctypes.c_void_p),
         ("client", ctypes.c_void_p),
         ("program", ctypes.POINTER(PJRT_Program)),
-        ("executable", ctypes.POINTER(ctypes.c_void_p)),
         ("compile_options", ctypes.c_char_p),
         ("compile_options_size", ctypes.c_size_t),
+        ("executable", ctypes.c_void_p),
     ]
 
 class PJRT_LoadedExecutable_Execute_Args(ctypes.Structure):
@@ -121,11 +134,12 @@ class PJRT_LoadedExecutable_Execute_Args(ctypes.Structure):
         ("extension_start", ctypes.c_void_p),
         ("executable", ctypes.c_void_p),
         ("options", ctypes.c_void_p),
-        ("argument_handles", ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))),
+        ("argument_lists", ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))),
         ("num_devices", ctypes.c_size_t),
         ("num_args", ctypes.c_size_t),
-        ("output_handles", ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))),
-        ("execute_device_complete_events", ctypes.c_void_p),
+        ("output_lists", ctypes.POINTER(ctypes.POINTER(ctypes.c_void_p))),
+        ("device_complete_events", ctypes.c_void_p),
+        ("execute_device", ctypes.c_void_p),
     ]
 
 class PJRT_Api(ctypes.Structure):
@@ -138,34 +152,85 @@ class PJRT_Api(ctypes.Structure):
         ("PJRT_Error_Message", ctypes.c_void_p),
         ("PJRT_Error_GetCode", ctypes.c_void_p),
 
-        ("PJRT_Client_Create", ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.POINTER(PJRT_Client_Create_Args))),
-        ("PJRT_Client_Destroy", ctypes.c_void_p),
-        ("PJRT_Client_PlatformName", ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.POINTER(PJRT_Client_PlatformName_Args))),
-        ("PJRT_Client_ProcessIndex", ctypes.c_void_p),
-        ("PJRT_Client_Devices", ctypes.c_void_p),
-        ("PJRT_Client_AddressableDevices", ctypes.c_void_p),
-        ("PJRT_Client_LookupDevice", ctypes.c_void_p),
-        ("PJRT_Client_Compile", ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.POINTER(PJRT_Client_Compile_Args))),
-        ("PJRT_Client_BufferFromHostBuffer", ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.POINTER(PJRT_Client_BufferFromHostBuffer_Args))),
-
-        ("PJRT_LoadedExecutable_Destroy", ctypes.c_void_p),
-        ("PJRT_LoadedExecutable_Execute", ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.POINTER(PJRT_LoadedExecutable_Execute_Args))),
-
-        ("PJRT_Buffer_Destroy", ctypes.c_void_p),
-        ("PJRT_Buffer_ToHostBuffer", ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.POINTER(PJRT_Buffer_ToHostBuffer_Args))),
-        ("PJRT_Buffer_OnDeviceSizeInBytes", ctypes.c_void_p),
-        ("PJRT_Buffer_Dimensions", ctypes.c_void_p),
-        ("PJRT_Buffer_ElementType", ctypes.c_void_p),
+        ("PJRT_Plugin_Initialize", ctypes.c_void_p),
+        ("PJRT_Plugin_Attributes", ctypes.c_void_p),
 
         ("PJRT_Event_Destroy", ctypes.c_void_p),
         ("PJRT_Event_IsReady", ctypes.c_void_p),
         ("PJRT_Event_Error", ctypes.c_void_p),
         ("PJRT_Event_Await", ctypes.c_void_p),
+        ("PJRT_Event_OnReady", ctypes.c_void_p),
 
-        ("PJRT_Device_Id", ctypes.c_void_p),
-        ("PJRT_Device_ProcessIndex", ctypes.c_void_p),
-        ("PJRT_Device_DebugString", ctypes.c_void_p),
-        ("PJRT_Device_ToString", ctypes.c_void_p),
+        ("PJRT_Client_Create", ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.POINTER(PJRT_Client_Create_Args))),
+        ("PJRT_Client_Destroy", ctypes.c_void_p),
+        ("PJRT_Client_PlatformName", ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.POINTER(PJRT_Client_PlatformName_Args))),
+        ("PJRT_Client_ProcessIndex", ctypes.c_void_p),
+        ("PJRT_Client_PlatformVersion", ctypes.c_void_p),
+        ("PJRT_Client_Devices", ctypes.c_void_p),
+        ("PJRT_Client_AddressableDevices", ctypes.c_void_p),
+        ("PJRT_Client_LookupDevice", ctypes.c_void_p),
+        ("PJRT_Client_LookupAddressableDevice", ctypes.c_void_p),
+        ("PJRT_Client_AddressableMemories", ctypes.c_void_p),
+        ("PJRT_Client_Compile", ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.POINTER(PJRT_Client_Compile_Args))),
+        ("PJRT_Client_DefaultDeviceAssignment", ctypes.c_void_p),
+        ("PJRT_Client_BufferFromHostBuffer", ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.POINTER(PJRT_Client_BufferFromHostBuffer_Args))),
+
+        ("PJRT_DeviceDescription_Id", ctypes.c_void_p),
+        ("PJRT_DeviceDescription_ProcessIndex", ctypes.c_void_p),
+        ("PJRT_DeviceDescription_Attributes", ctypes.c_void_p),
+        ("PJRT_DeviceDescription_Kind", ctypes.c_void_p),
+        ("PJRT_DeviceDescription_DebugString", ctypes.c_void_p),
+        ("PJRT_DeviceDescription_ToString", ctypes.c_void_p),
+
+        ("PJRT_Device_GetDescription", ctypes.c_void_p),
+        ("PJRT_Device_IsAddressable", ctypes.c_void_p),
+        ("PJRT_Device_LocalHardwareId", ctypes.c_void_p),
+        ("PJRT_Device_AddressableMemories", ctypes.c_void_p),
+        ("PJRT_Device_DefaultMemory", ctypes.c_void_p),
+        ("PJRT_Device_MemoryStats", ctypes.c_void_p),
+
+        ("PJRT_Memory_Id", ctypes.c_void_p),
+        ("PJRT_Memory_Kind", ctypes.c_void_p),
+        ("PJRT_Memory_DebugString", ctypes.c_void_p),
+        ("PJRT_Memory_ToString", ctypes.c_void_p),
+        ("PJRT_Memory_AddressableByDevices", ctypes.c_void_p),
+
+        ("PJRT_Executable_Destroy", ctypes.c_void_p),
+        ("PJRT_Executable_Name", ctypes.c_void_p),
+        ("PJRT_Executable_NumReplicas", ctypes.c_void_p),
+        ("PJRT_Executable_NumPartitions", ctypes.c_void_p),
+        ("PJRT_Executable_NumOutputs", ctypes.c_void_p),
+        ("PJRT_Executable_SizeOfGeneratedCodeInBytes", ctypes.c_void_p),
+        ("PJRT_Executable_GetCostAnalysis", ctypes.c_void_p),
+        ("PJRT_Executable_OutputMemoryKinds", ctypes.c_void_p),
+        ("PJRT_Executable_OptimizedProgram", ctypes.c_void_p),
+        ("PJRT_Executable_Serialize", ctypes.c_void_p),
+
+        ("PJRT_LoadedExecutable_Destroy", ctypes.c_void_p),
+        ("PJRT_LoadedExecutable_GetExecutable", ctypes.c_void_p),
+        ("PJRT_LoadedExecutable_AddressableDevices", ctypes.c_void_p),
+        ("PJRT_LoadedExecutable_Delete", ctypes.c_void_p),
+        ("PJRT_LoadedExecutable_IsDeleted", ctypes.c_void_p),
+        ("PJRT_LoadedExecutable_Execute", ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.POINTER(PJRT_LoadedExecutable_Execute_Args))),
+        ("PJRT_Executable_DeserializeAndLoad", ctypes.c_void_p),
+        ("PJRT_LoadedExecutable_Fingerprint", ctypes.c_void_p),
+
+        ("PJRT_Buffer_Destroy", ctypes.c_void_p),
+        ("PJRT_Buffer_ElementType", ctypes.c_void_p),
+        ("PJRT_Buffer_Dimensions", ctypes.c_void_p),
+        ("PJRT_Buffer_UnpaddedDimensions", ctypes.c_void_p),
+        ("PJRT_Buffer_DynamicDimensionIndices", ctypes.c_void_p),
+        ("PJRT_Buffer_GetMemoryLayout", ctypes.c_void_p),
+        ("PJRT_Buffer_OnDeviceSizeInBytes", ctypes.c_void_p),
+        ("PJRT_Buffer_Device", ctypes.c_void_p),
+        ("PJRT_Buffer_Memory", ctypes.c_void_p),
+        ("PJRT_Buffer_Delete", ctypes.c_void_p),
+        ("PJRT_Buffer_IsDeleted", ctypes.c_void_p),
+        ("PJRT_Buffer_CopyToDevice", ctypes.c_void_p),
+        ("PJRT_Buffer_ToHostBuffer", ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.POINTER(PJRT_Buffer_ToHostBuffer_Args))),
+        ("PJRT_Buffer_IsOnCpu", ctypes.c_void_p),
+        ("PJRT_Buffer_ReadyEvent", ctypes.c_void_p),
+        ("PJRT_Buffer_UnsafePointer", ctypes.c_void_p),
     ]
 
 # High-Level Python Client Wrapper
@@ -176,14 +241,13 @@ class VulkanPJRTClient:
         self.lib.GetPjrtApi.restype = ctypes.POINTER(PJRT_Api)
         self.api = self.lib.GetPjrtApi().contents
 
-        client_ptr = ctypes.c_void_p()
         args = PJRT_Client_Create_Args()
         args.struct_size = ctypes.sizeof(PJRT_Client_Create_Args)
-        args.client = ctypes.cast(ctypes.byref(client_ptr), ctypes.POINTER(ctypes.c_void_p))
+        args.client = None
         err = self.api.PJRT_Client_Create(ctypes.byref(args))
         if err:
             raise RuntimeError(f"Failed to create Vulkan PJRT Client")
-        self.client_ptr = client_ptr.value
+        self.client_ptr = args.client
 
     def get_platform_name(self) -> str:
         args = PJRT_Client_PlatformName_Args()
@@ -197,7 +261,6 @@ class VulkanPJRTClient:
         dims_type = ctypes.c_int64 * arr.ndim
         dims_array = dims_type(*arr.shape)
 
-        buf_ptr = ctypes.c_void_p()
         args = PJRT_Client_BufferFromHostBuffer_Args()
         args.struct_size = ctypes.sizeof(PJRT_Client_BufferFromHostBuffer_Args)
         args.client = self.client_ptr
@@ -205,18 +268,25 @@ class VulkanPJRTClient:
         args.type = PJRT_Buffer_Type.from_numpy(arr.dtype)
         args.dims = dims_array
         args.num_dims = arr.ndim
-        args.buffer = ctypes.cast(ctypes.byref(buf_ptr), ctypes.POINTER(ctypes.c_void_p))
+        args.byte_strides = None
+        args.num_byte_strides = 0
+        args.host_buffer_semantics = 0
+        args.device = None
+        args.memory = None
+        args.device_layout = None
+        args.buffer = None
 
         err = self.api.PJRT_Client_BufferFromHostBuffer(ctypes.byref(args))
         if err:
             raise RuntimeError("Failed to create buffer from host array")
-        return buf_ptr.value
+        return args.buffer
 
     def buffer_to_numpy(self, buffer_ptr: ctypes.c_void_p, shape: Tuple[int, ...], dtype=np.float32) -> np.ndarray:
         result = np.empty(shape, dtype=dtype)
         args = PJRT_Buffer_ToHostBuffer_Args()
         args.struct_size = ctypes.sizeof(PJRT_Buffer_ToHostBuffer_Args)
-        args.buffer = buffer_ptr
+        args.src = buffer_ptr
+        args.host_layout = None
         args.dst = result.ctypes.data_as(ctypes.c_void_p)
         args.dst_size = result.nbytes
 
@@ -227,22 +297,23 @@ class VulkanPJRTClient:
 
     def compile(self, code: str, format: str = "payload") -> ctypes.c_void_p:
         prog = PJRT_Program()
+        prog.struct_size = ctypes.sizeof(PJRT_Program)
+        prog.extension_start = None
         prog.code = code.encode("utf-8")
         prog.code_size = len(prog.code)
         prog.format = format.encode("utf-8")
         prog.format_size = len(prog.format)
 
-        exec_ptr = ctypes.c_void_p()
         args = PJRT_Client_Compile_Args()
         args.struct_size = ctypes.sizeof(PJRT_Client_Compile_Args)
         args.client = self.client_ptr
         args.program = ctypes.pointer(prog)
-        args.executable = ctypes.cast(ctypes.byref(exec_ptr), ctypes.POINTER(ctypes.c_void_p))
+        args.executable = None
 
         err = self.api.PJRT_Client_Compile(ctypes.byref(args))
         if err:
             raise RuntimeError("Failed to compile computation for Vulkan device")
-        return exec_ptr.value
+        return args.executable
 
     def execute(self, executable_ptr: ctypes.c_void_p, inputs: List[ctypes.c_void_p]) -> List[ctypes.c_void_p]:
         arg_array_type = ctypes.c_void_p * len(inputs)
@@ -268,6 +339,10 @@ class VulkanPJRTClient:
             raise RuntimeError("Failed to execute computation on Vulkan GPU")
 
         return [out_bufs[0]]
+
+def initialize():
+    """Plugin initialization callback for JAX."""
+    pass
 
 def register_jax_plugin():
     """Register Vulkan PJRT plugin with JAX."""
