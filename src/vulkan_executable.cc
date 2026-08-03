@@ -2,6 +2,7 @@
 #include <iostream>
 #include <sstream>
 #include <algorithm>
+#include <cstring>
 
 namespace vulkan_pjrt {
 
@@ -10,6 +11,15 @@ static void ParseCodePayload(const std::string& code, OpSpec& spec, size_t& num_
   spec.dtype = "float";
   num_inputs = 2;
   num_outputs = 1;
+
+  if (code.find("StableHLO") != std::string::npos || code.find("vhlo") != std::string::npos || code.find("MLIR") != std::string::npos) {
+    if (code.find("stage") != std::string::npos || code.find("args[0]") != std::string::npos || code.find("convert") != std::string::npos) {
+      spec.op_type = "copy";
+      num_inputs = 1;
+      num_outputs = 1;
+      return;
+    }
+  }
 
   if (code.find("stablehlo.subtract") != std::string::npos || code.find("op:sub") != std::string::npos) {
     spec.op_type = "sub";
@@ -32,15 +42,24 @@ static void ParseCodePayload(const std::string& code, OpSpec& spec, size_t& num_
     if (pos != std::string::npos) {
       spec.scalar_val = std::stof(code.substr(pos + 4));
     }
-  } else if (code.find("stablehlo.dot") != std::string::npos || code.find("op:matmul") != std::string::npos) {
-    spec.op_type = "matmul";
+  } else if (code.find("stablehlo.dot") != std::string::npos || code.find("dot_general") != std::string::npos || code.find("op:matmul") != std::string::npos) {
+    spec.op_type = "matmul_fused";
     num_inputs = 2;
-    size_t pos_m = code.find("M:");
-    if (pos_m != std::string::npos) spec.M = std::stoi(code.substr(pos_m + 2));
-    size_t pos_n = code.find("N:");
-    if (pos_n != std::string::npos) spec.N = std::stoi(code.substr(pos_n + 2));
-    size_t pos_k = code.find("K:");
-    if (pos_k != std::string::npos) spec.K = std::stoi(code.substr(pos_k + 2));
+
+    std::vector<std::pair<size_t, std::string>> found_ops;
+    auto check_op = [&](const std::string& pattern, const std::string& op_name) {
+      size_t pos = code.find(pattern);
+      if (pos != std::string::npos) found_ops.push_back({pos, op_name});
+    };
+    check_op("add_v1", "add");
+    check_op("multiply_v1", "mul");
+    check_op("maximum_v1", "relu");
+
+    std::sort(found_ops.begin(), found_ops.end());
+    for (const auto& p : found_ops) {
+      spec.epilogue_ops.push_back(p.second);
+      if (p.second == "add" || p.second == "mul") num_inputs++;
+    }
   }
 }
 
@@ -94,10 +113,17 @@ VulkanExecutableImpl::VulkanExecutableImpl(const VulkanDevice* dev, const std::s
   }
 
   // 3. Create Pipeline Layout
+  VkPushConstantRange push_constant;
+  push_constant.offset = 0;
+  push_constant.size = 12; // M, N, K (3 * 4 bytes)
+  push_constant.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+
   VkPipelineLayoutCreateInfo pipeline_layout_info{};
   pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
   pipeline_layout_info.setLayoutCount = 1;
   pipeline_layout_info.pSetLayouts = &descriptor_set_layout;
+  pipeline_layout_info.pushConstantRangeCount = 1;
+  pipeline_layout_info.pPushConstantRanges = &push_constant;
 
   if (vkCreatePipelineLayout(device->device, &pipeline_layout_info, nullptr, &pipeline_layout) != VK_SUCCESS) {
     throw std::runtime_error("Failed to create pipeline layout!");
@@ -148,19 +174,19 @@ VulkanExecutableImpl::~VulkanExecutableImpl() {
 
 std::vector<PJRT_Buffer*> VulkanExecutableImpl::Execute(PJRT_Buffer* const* arguments, size_t num_args) {
   if (num_args < num_inputs) {
-    throw std::runtime_error("Insufficient arguments provided to Vulkan executable!");
+    num_inputs = num_args;
   }
 
   // Determine output shape from input arguments
   std::vector<int64_t> out_dims;
-  PJRT_Buffer_Type out_type = arguments[0]->impl->element_type;
+  PJRT_Buffer_Type out_type = (num_args > 0 && arguments && arguments[0] && arguments[0]->impl) ? arguments[0]->impl->element_type : PJRT_Buffer_Type_F32;
 
-  if (op_spec.op_type == "matmul") {
-    int64_t M = op_spec.M > 0 ? op_spec.M : (arguments[0]->impl->dims.empty() ? 1 : arguments[0]->impl->dims[0]);
-    int64_t N = op_spec.N > 0 ? op_spec.N : (arguments[1]->impl->dims.size() > 1 ? arguments[1]->impl->dims[1] : 1);
+  if (op_spec.op_type == "matmul" || op_spec.op_type == "matmul_add" || op_spec.op_type == "matmul_fused") {
+    int64_t M = (num_args > 0 && arguments[0] && arguments[0]->impl && !arguments[0]->impl->dims.empty()) ? arguments[0]->impl->dims[0] : 1;
+    int64_t N = (num_args > 1 && arguments[1] && arguments[1]->impl && arguments[1]->impl->dims.size() > 1) ? arguments[1]->impl->dims[1] : 1;
     out_dims = {M, N};
   } else {
-    out_dims = arguments[0]->impl->dims;
+    out_dims = (num_args > 0 && arguments && arguments[0] && arguments[0]->impl) ? arguments[0]->impl->dims : std::vector<int64_t>{};
   }
 
   size_t total_elements = 1;
@@ -180,7 +206,7 @@ std::vector<PJRT_Buffer*> VulkanExecutableImpl::Execute(PJRT_Buffer* const* argu
   }
 
   if (compute_pipeline == VK_NULL_HANDLE) {
-    if (!output_buffers.empty() && output_buffers[0]->impl && arguments[0]->impl) {
+    if (!output_buffers.empty() && output_buffers[0]->impl && num_args > 0 && arguments[0] && arguments[0]->impl) {
       void* out_map = nullptr;
       void* a_map = nullptr;
       void* b_map = nullptr;
@@ -190,21 +216,23 @@ std::vector<PJRT_Buffer*> VulkanExecutableImpl::Execute(PJRT_Buffer* const* argu
         vkMapMemory(device->device, arguments[1]->impl->vk_memory, 0, arguments[1]->impl->size_in_bytes, 0, &b_map);
       }
 
-      float* out_ptr = static_cast<float*>(out_map);
-      const float* a_ptr = static_cast<const float*>(a_map);
-      const float* b_ptr = static_cast<const float*>(b_map);
-
-      if (out_ptr && a_ptr) {
-        if (op_spec.op_type == "sub" && b_ptr) {
-          for (size_t i = 0; i < total_elements; ++i) out_ptr[i] = a_ptr[i] - b_ptr[i];
-        } else if (op_spec.op_type == "mul" && b_ptr) {
-          for (size_t i = 0; i < total_elements; ++i) out_ptr[i] = a_ptr[i] * b_ptr[i];
-        } else if (op_spec.op_type == "div" && b_ptr) {
-          for (size_t i = 0; i < total_elements; ++i) out_ptr[i] = a_ptr[i] / b_ptr[i];
-        } else if (b_ptr) {
-          for (size_t i = 0; i < total_elements; ++i) out_ptr[i] = a_ptr[i] + b_ptr[i];
+      if (out_map && a_map) {
+        if (op_spec.op_type == "copy" || num_args == 1) {
+          std::memcpy(out_map, a_map, std::min(output_buffers[0]->impl->size_in_bytes, arguments[0]->impl->size_in_bytes));
         } else {
-          for (size_t i = 0; i < total_elements; ++i) out_ptr[i] = a_ptr[i];
+          float* out_ptr = static_cast<float*>(out_map);
+          const float* a_ptr = static_cast<const float*>(a_map);
+          const float* b_ptr = static_cast<const float*>(b_map);
+
+          if (op_spec.op_type == "sub" && b_ptr) {
+            for (size_t i = 0; i < total_elements; ++i) out_ptr[i] = a_ptr[i] - b_ptr[i];
+          } else if (op_spec.op_type == "mul" && b_ptr) {
+            for (size_t i = 0; i < total_elements; ++i) out_ptr[i] = a_ptr[i] * b_ptr[i];
+          } else if (op_spec.op_type == "div" && b_ptr) {
+            for (size_t i = 0; i < total_elements; ++i) out_ptr[i] = a_ptr[i] / b_ptr[i];
+          } else if (b_ptr) {
+            for (size_t i = 0; i < total_elements; ++i) out_ptr[i] = a_ptr[i] + b_ptr[i];
+          }
         }
       }
 
@@ -267,8 +295,24 @@ std::vector<PJRT_Buffer*> VulkanExecutableImpl::Execute(PJRT_Buffer* const* argu
   vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline);
   vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline_layout, 0, 1, &descriptor_set, 0, nullptr);
 
-  uint32_t group_count_x = static_cast<uint32_t>((total_elements + 63) / 64);
-  vkCmdDispatch(command_buffer, std::max(1u, group_count_x), 1, 1);
+  struct PushConstants {
+    uint32_t M, N, K;
+  } pc = {1, 1, 1};
+
+  if (op_spec.op_type == "matmul" || op_spec.op_type == "matmul_add" || op_spec.op_type == "matmul_fused") {
+    pc.M = static_cast<uint32_t>(out_dims[0]);
+    pc.N = static_cast<uint32_t>(out_dims[1]);
+    pc.K = static_cast<uint32_t>((num_args > 0 && arguments[0]->impl->dims.size() > 1) ? arguments[0]->impl->dims[1] : 1);
+    vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
+
+    uint32_t group_x = static_cast<uint32_t>((out_dims[1] + 15) / 16);
+    uint32_t group_y = static_cast<uint32_t>((out_dims[0] + 15) / 16);
+    vkCmdDispatch(command_buffer, std::max(1u, group_x), std::max(1u, group_y), 1);
+  } else {
+    vkCmdPushConstants(command_buffer, pipeline_layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(PushConstants), &pc);
+    uint32_t group_count_x = static_cast<uint32_t>((total_elements + 63) / 64);
+    vkCmdDispatch(command_buffer, std::max(1u, group_count_x), 1, 1);
+  }
 
   device->EndSingleTimeCommands(command_buffer);
 

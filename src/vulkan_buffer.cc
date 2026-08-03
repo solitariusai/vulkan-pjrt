@@ -43,7 +43,6 @@ VulkanBufferImpl::VulkanBufferImpl(const VulkanDevice* dev, PJRT_Buffer_Type typ
     }();
     device = fallback_dev.get();
   }
-
   size_t elem_size = GetElementTypeSize(type);
   size_t num_elements = 1;
   dims.assign(dimensions, dimensions + num_dims);

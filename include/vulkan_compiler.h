@@ -9,10 +9,11 @@
 namespace vulkan_pjrt {
 
 struct OpSpec {
-  std::string op_type; // "add", "sub", "mul", "div", "relu", "matmul", "copy", "scale", "reduce_sum"
+  std::string op_type; // "add", "sub", "mul", "div", "max", "min", "exp", "log", "sqrt", "sin", "cos", "relu", "matmul", "copy", "scale"
   std::string dtype;   // "float", "int"
   float scalar_val{0.0f};
   int M{0}, N{0}, K{0};
+  std::vector<std::string> epilogue_ops;
 };
 
 class ShaderCompiler {
