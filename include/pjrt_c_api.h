@@ -191,7 +191,6 @@ typedef void (*PJRT_Error_PayloadVisitor)(const char* key, size_t key_size,
 
 typedef struct PJRT_Error_FunctionTable {
   size_t struct_size;
-  size_t instance_size;
   PJRT_Extension_Base* extension_start;
   void (*destroy)(PJRT_Error* error);
   void (*message)(const PJRT_Error* error, const char** message,

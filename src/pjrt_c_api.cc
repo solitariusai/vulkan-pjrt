@@ -39,7 +39,6 @@ static void ErrorForEachPayload(const PJRT_Error* error, PJRT_Error_PayloadVisit
 
 static const PJRT_Error_FunctionTable g_error_vtable = {
   /* struct_size */ sizeof(PJRT_Error_FunctionTable),
-  /* instance_size */ sizeof(PJRT_ErrorImpl),
   /* extension_start */ nullptr,
   /* destroy */ ErrorDestroy,
   /* message */ ErrorMessage,
@@ -58,6 +57,36 @@ static PJRT_Error* CreateError(PJRT_Error_Code code, const std::string& msg) {
 extern "C" {
 
 PJRT_Error* Impl_PJRT_Plugin_Initialize(PJRT_Plugin_Initialize_Args* args) {
+  return nullptr;
+}
+
+void Impl_PJRT_Error_Destroy(PJRT_Error_Destroy_Args* args) {
+  if (args && args->error) {
+    delete static_cast<PJRT_ErrorImpl*>(args->error);
+  }
+}
+
+void Impl_PJRT_Error_Message(PJRT_Error_Message_Args* args) {
+  if (!args) return;
+  if (!args->error) {
+    args->message = "";
+    args->message_size = 0;
+    return;
+  }
+  auto err = static_cast<const PJRT_ErrorImpl*>(args->error);
+  args->message = err->message.c_str();
+  args->message_size = err->message.size();
+}
+
+PJRT_Error* Impl_PJRT_Error_GetCode(PJRT_Error_GetCode_Args* args) {
+  if (args) {
+    if (!args->error) {
+      args->code = PJRT_Error_Code_OK;
+    } else {
+      auto err = static_cast<const PJRT_ErrorImpl*>(args->error);
+      args->code = err->code;
+    }
+  }
   return nullptr;
 }
 
@@ -330,17 +359,20 @@ PJRT_Error* Impl_PJRT_Client_Compile(PJRT_Client_Compile_Args* args) {
 
   std::string code = "";
   std::string format = "";
-  if (args->program && args->program->code && args->program->code_size > 0) {
-    code.assign(args->program->code, args->program->code_size);
-  }
-  if (args->program && args->program->format && args->program->format_size > 0) {
-    format.assign(args->program->format, args->program->format_size);
+  try {
+    if (args->program) {
+        if (args->program->code && args->program->code_size > 0) {
+          code.assign(args->program->code, args->program->code_size);
+        }
+        if (args->program->format && args->program->format_size > 0) {
+          format.assign(args->program->format, args->program->format_size);
+        }
+    }
+  } catch (const std::exception& e) {
+    std::cerr << "Compile exception: " << e.what() << std::endl;
+    return CreateError(PJRT_Error_Code_INTERNAL, e.what());
   }
 
-  std::cout << "[PJRT Plugin Compile] Format: " << format << ", Code length: " << code.size() << std::endl;
-  if (!code.empty()) {
-    std::cout << "[PJRT MLIR Payload Snippet]:\n" << code.substr(0, std::min<size_t>(code.size(), 300)) << std::endl;
-  }
   PJRT_LoadedExecutable* exec = new PJRT_LoadedExecutable();
   try {
     exec->impl = std::make_unique<vulkan_pjrt::VulkanExecutableImpl>(
@@ -412,17 +444,26 @@ PJRT_Error* Impl_PJRT_Executable_SizeOfGeneratedCodeInBytes(PJRT_Executable_Size
 }
 
 PJRT_Error* Impl_PJRT_Executable_GetCostAnalysis(PJRT_Executable_GetCostAnalysis_Args* args) {
-  return nullptr;
+  return CreateError(PJRT_Error_Code_UNIMPLEMENTED, "GetCostAnalysis not implemented");
 }
 
 PJRT_Error* Impl_PJRT_Executable_OptimizedProgram(PJRT_Executable_OptimizedProgram_Args* args) {
   if (args && args->program) {
+    args->program->code = (char*)"";
     args->program->code_size = 0;
+    args->program->format = "mlir";
+    args->program->format_size = 4;
   }
   return nullptr;
 }
 
 PJRT_Error* Impl_PJRT_Executable_Serialize(PJRT_Executable_Serialize_Args* args) {
+  if (args) {
+    args->serialized_bytes = "";
+    args->serialized_bytes_size = 0;
+    args->serialized_executable = nullptr;
+    args->serialized_executable_deleter = [](PJRT_SerializedExecutable*){} ;
+  }
   return nullptr;
 }
 
@@ -434,10 +475,20 @@ PJRT_Error* Impl_PJRT_LoadedExecutable_AddressableDeviceLogicalIds(PJRT_LoadedEx
   return nullptr;
 }
 
+PJRT_Error* Impl_PJRT_Executable_Fingerprint(PJRT_Executable_Fingerprint_Args* args) {
+  if (args) {
+    static const char fp[] = "vulkan_executable_fingerprint";
+    args->executable_fingerprint = fp;
+    args->executable_fingerprint_size = std::strlen(fp);
+  }
+  return nullptr;
+}
+
 PJRT_Error* Impl_PJRT_LoadedExecutable_Fingerprint(PJRT_LoadedExecutable_Fingerprint_Args* args) {
   if (args) {
-    args->executable_fingerprint = nullptr;
-    args->executable_fingerprint_size = 0;
+    static const char fp[] = "vulkan_executable_fingerprint";
+    args->executable_fingerprint = fp;
+    args->executable_fingerprint_size = std::strlen(fp);
   }
   return nullptr;
 }
@@ -457,13 +508,13 @@ PJRT_Error* Impl_PJRT_LoadedExecutable_GetDeviceAssignment(PJRT_LoadedExecutable
 
 PJRT_Error* Impl_PJRT_Executable_OutputMemoryKinds(PJRT_Executable_OutputMemoryKinds_Args* args) {
   if (args) {
-    static const char* default_kind = "device";
-    static const size_t default_kind_size = 6;
-    static const char* kinds[1] = { default_kind };
-    static const size_t kind_sizes[1] = { default_kind_size };
+    size_t num_outs = (args->executable && args->executable->impl) ? args->executable->impl->num_outputs : 1;
+    if (num_outs == 0) num_outs = 1;
+    static const char* kinds[8] = { "device", "device", "device", "device", "device", "device", "device", "device" };
+    static const size_t kind_sizes[8] = { 6, 6, 6, 6, 6, 6, 6, 6 };
     args->memory_kinds = kinds;
     args->memory_kind_sizes = kind_sizes;
-    args->num_outputs = 1;
+    args->num_outputs = std::min<size_t>(num_outs, 8);
   }
   return nullptr;
 }
@@ -578,7 +629,8 @@ PJRT_Error* Impl_PJRT_Buffer_OnDeviceSizeInBytes(PJRT_Buffer_OnDeviceSizeInBytes
 
 PJRT_Error* Impl_PJRT_Buffer_Dimensions(PJRT_Buffer_Dimensions_Args* args) {
   if (args && args->buffer && args->buffer->impl) {
-    args->dims = args->buffer->impl->dims.data();
+    static const int64_t empty_dims[1] = {0};
+    args->dims = args->buffer->impl->dims.empty() ? empty_dims : args->buffer->impl->dims.data();
     args->num_dims = args->buffer->impl->dims.size();
   }
   return nullptr;
@@ -586,7 +638,8 @@ PJRT_Error* Impl_PJRT_Buffer_Dimensions(PJRT_Buffer_Dimensions_Args* args) {
 
 PJRT_Error* Impl_PJRT_Buffer_UnpaddedDimensions(PJRT_Buffer_UnpaddedDimensions_Args* args) {
   if (args && args->buffer && args->buffer->impl) {
-    args->unpadded_dims = args->buffer->impl->dims.data();
+    static const int64_t empty_dims[1] = {0};
+    args->unpadded_dims = args->buffer->impl->dims.empty() ? empty_dims : args->buffer->impl->dims.data();
     args->num_dims = args->buffer->impl->dims.size();
   }
   return nullptr;
@@ -752,6 +805,9 @@ static const PJRT_Api g_pjrt_api = []() {
   api.PJRT_Memory_AddressableByDevices = Impl_PJRT_Memory_AddressableByDevices;
 
   api.PJRT_Executable_Destroy = Impl_PJRT_Executable_Destroy;
+  api.PJRT_Error_Destroy = Impl_PJRT_Error_Destroy;
+  api.PJRT_Error_Message = Impl_PJRT_Error_Message;
+  api.PJRT_Error_GetCode = Impl_PJRT_Error_GetCode;
   api.PJRT_Executable_Name = Impl_PJRT_Executable_Name;
   api.PJRT_Executable_NumReplicas = Impl_PJRT_Executable_NumReplicas;
   api.PJRT_Executable_NumPartitions = Impl_PJRT_Executable_NumPartitions;
@@ -761,6 +817,7 @@ static const PJRT_Api g_pjrt_api = []() {
   api.PJRT_Executable_OutputMemoryKinds = Impl_PJRT_Executable_OutputMemoryKinds;
   api.PJRT_Executable_OptimizedProgram = Impl_PJRT_Executable_OptimizedProgram;
   api.PJRT_Executable_Serialize = Impl_PJRT_Executable_Serialize;
+  api.PJRT_Executable_Fingerprint = Impl_PJRT_Executable_Fingerprint;
 
   api.PJRT_LoadedExecutable_Destroy = Impl_PJRT_LoadedExecutable_Destroy;
   api.PJRT_LoadedExecutable_GetExecutable = Impl_PJRT_LoadedExecutable_GetExecutable;

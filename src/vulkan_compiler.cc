@@ -84,6 +84,20 @@ std::string ShaderCompiler::GenerateComputeShader(const OpSpec& spec, size_t num
     ss << "  out0[g_id] = in0[g_id] * in1[g_id];\n";
   } else if (spec.op_type == "div") {
     ss << "  out0[g_id] = in0[g_id] / in1[g_id];\n";
+  } else if (spec.op_type == "max") {
+    ss << "  out0[g_id] = max(in0[g_id], in1[g_id]);\n";
+  } else if (spec.op_type == "min") {
+    ss << "  out0[g_id] = min(in0[g_id], in1[g_id]);\n";
+  } else if (spec.op_type == "exp") {
+    ss << "  out0[g_id] = exp(in0[g_id]);\n";
+  } else if (spec.op_type == "log") {
+    ss << "  out0[g_id] = log(in0[g_id]);\n";
+  } else if (spec.op_type == "sqrt") {
+    ss << "  out0[g_id] = sqrt(in0[g_id]);\n";
+  } else if (spec.op_type == "sin") {
+    ss << "  out0[g_id] = sin(in0[g_id]);\n";
+  } else if (spec.op_type == "cos") {
+    ss << "  out0[g_id] = cos(in0[g_id]);\n";
   } else if (spec.op_type == "relu") {
     ss << "  out0[g_id] = max(in0[g_id], " << glsl_type << "(0.0));\n";
   } else if (spec.op_type == "scale") {
@@ -91,7 +105,7 @@ std::string ShaderCompiler::GenerateComputeShader(const OpSpec& spec, size_t num
   } else if (spec.op_type == "copy") {
     ss << "  out0[g_id] = in0[g_id];\n";
   } else if (spec.op_type == "matmul") {
-    // Basic Matmul compute kernel: C[i, j] = sum(A[i, k] * B[k, j])
+    // Matmul compute kernel: C[i, j] = sum(A[i, k] * B[k, j])
     ss << "  uint M = " << (spec.M > 0 ? spec.M : 1) << ";\n";
     ss << "  uint N = " << (spec.N > 0 ? spec.N : 1) << ";\n";
     ss << "  uint K = " << (spec.K > 0 ? spec.K : 1) << ";\n";
