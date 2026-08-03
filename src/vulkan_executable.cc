@@ -11,19 +11,28 @@ static void ParseCodePayload(const std::string& code, OpSpec& spec, size_t& num_
   num_inputs = 2;
   num_outputs = 1;
 
-  if (code.find("op:sub") != std::string::npos) spec.op_type = "sub";
-  else if (code.find("op:mul") != std::string::npos) spec.op_type = "mul";
-  else if (code.find("op:div") != std::string::npos) spec.op_type = "div";
-  else if (code.find("op:relu") != std::string::npos) { spec.op_type = "relu"; num_inputs = 1; }
-  else if (code.find("op:copy") != std::string::npos) { spec.op_type = "copy"; num_inputs = 1; }
-  else if (code.find("op:scale") != std::string::npos) {
+  if (code.find("stablehlo.subtract") != std::string::npos || code.find("op:sub") != std::string::npos) {
+    spec.op_type = "sub";
+  } else if (code.find("stablehlo.multiply") != std::string::npos || code.find("op:mul") != std::string::npos) {
+    spec.op_type = "mul";
+  } else if (code.find("stablehlo.divide") != std::string::npos || code.find("op:div") != std::string::npos) {
+    spec.op_type = "div";
+  } else if (code.find("stablehlo.add") != std::string::npos || code.find("op:add") != std::string::npos) {
+    spec.op_type = "add";
+  } else if (code.find("op:relu") != std::string::npos) {
+    spec.op_type = "relu";
+    num_inputs = 1;
+  } else if (code.find("op:copy") != std::string::npos) {
+    spec.op_type = "copy";
+    num_inputs = 1;
+  } else if (code.find("op:scale") != std::string::npos) {
     spec.op_type = "scale";
     num_inputs = 1;
     size_t pos = code.find("val:");
     if (pos != std::string::npos) {
       spec.scalar_val = std::stof(code.substr(pos + 4));
     }
-  } else if (code.find("op:matmul") != std::string::npos) {
+  } else if (code.find("stablehlo.dot") != std::string::npos || code.find("op:matmul") != std::string::npos) {
     spec.op_type = "matmul";
     num_inputs = 2;
     size_t pos_m = code.find("M:");
@@ -168,6 +177,42 @@ std::vector<PJRT_Buffer*> VulkanExecutableImpl::Execute(PJRT_Buffer* const* argu
     }
     out_buf->impl = std::move(buf_impl);
     output_buffers.push_back(out_buf);
+  }
+
+  if (compute_pipeline == VK_NULL_HANDLE) {
+    if (!output_buffers.empty() && output_buffers[0]->impl && arguments[0]->impl) {
+      void* out_map = nullptr;
+      void* a_map = nullptr;
+      void* b_map = nullptr;
+      vkMapMemory(device->device, output_buffers[0]->impl->vk_memory, 0, output_buffers[0]->impl->size_in_bytes, 0, &out_map);
+      vkMapMemory(device->device, arguments[0]->impl->vk_memory, 0, arguments[0]->impl->size_in_bytes, 0, &a_map);
+      if (num_args > 1 && arguments[1] && arguments[1]->impl) {
+        vkMapMemory(device->device, arguments[1]->impl->vk_memory, 0, arguments[1]->impl->size_in_bytes, 0, &b_map);
+      }
+
+      float* out_ptr = static_cast<float*>(out_map);
+      const float* a_ptr = static_cast<const float*>(a_map);
+      const float* b_ptr = static_cast<const float*>(b_map);
+
+      if (out_ptr && a_ptr) {
+        if (op_spec.op_type == "sub" && b_ptr) {
+          for (size_t i = 0; i < total_elements; ++i) out_ptr[i] = a_ptr[i] - b_ptr[i];
+        } else if (op_spec.op_type == "mul" && b_ptr) {
+          for (size_t i = 0; i < total_elements; ++i) out_ptr[i] = a_ptr[i] * b_ptr[i];
+        } else if (op_spec.op_type == "div" && b_ptr) {
+          for (size_t i = 0; i < total_elements; ++i) out_ptr[i] = a_ptr[i] / b_ptr[i];
+        } else if (b_ptr) {
+          for (size_t i = 0; i < total_elements; ++i) out_ptr[i] = a_ptr[i] + b_ptr[i];
+        } else {
+          for (size_t i = 0; i < total_elements; ++i) out_ptr[i] = a_ptr[i];
+        }
+      }
+
+      if (out_map) vkUnmapMemory(device->device, output_buffers[0]->impl->vk_memory);
+      if (a_map) vkUnmapMemory(device->device, arguments[0]->impl->vk_memory);
+      if (b_map && arguments[1] && arguments[1]->impl) vkUnmapMemory(device->device, arguments[1]->impl->vk_memory);
+    }
+    return output_buffers;
   }
 
   // Allocate Descriptor Set
