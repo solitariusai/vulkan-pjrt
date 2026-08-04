@@ -353,6 +353,7 @@ PJRT_Error* Impl_PJRT_Memory_AddressableByDevices(PJRT_Memory_AddressableByDevic
 }
 
 PJRT_Error* Impl_PJRT_Client_Compile(PJRT_Client_Compile_Args* args) {
+  std::cout << "[Vulkan JIT] Impl_PJRT_Client_Compile called" << std::endl;
   if (!args || !args->client) {
     return CreateError(PJRT_Error_Code_INVALID_ARGUMENT, "Invalid Compile args");
   }
@@ -376,7 +377,7 @@ PJRT_Error* Impl_PJRT_Client_Compile(PJRT_Client_Compile_Args* args) {
   PJRT_LoadedExecutable* exec = new PJRT_LoadedExecutable();
   try {
     exec->impl = std::make_unique<vulkan_pjrt::VulkanExecutableImpl>(
-        args->client->impl->device.get(), code, format);
+        args->client->impl->device.get(), &args->client->device_handle, code, format);
   } catch (const std::exception& e) {
     std::cerr << "[CPP Compile Error] " << e.what() << std::endl;
   }
@@ -451,8 +452,8 @@ PJRT_Error* Impl_PJRT_Executable_OptimizedProgram(PJRT_Executable_OptimizedProgr
   if (args && args->program) {
     args->program->code = (char*)"";
     args->program->code_size = 0;
-    args->program->format = "mlir";
-    args->program->format_size = 4;
+    args->program->format = "mlir_text";
+    args->program->format_size = 9;
   }
   return nullptr;
 }
@@ -510,6 +511,7 @@ PJRT_Error* Impl_PJRT_Executable_OutputMemoryKinds(PJRT_Executable_OutputMemoryK
   if (args) {
     size_t num_outs = (args->executable && args->executable->impl) ? args->executable->impl->num_outputs : 1;
     if (num_outs == 0) num_outs = 1;
+    std::cout << "[Vulkan JIT] OutputMemoryKinds returning num_outputs = " << num_outs << std::endl;
     static const char* kinds[8] = { "device", "device", "device", "device", "device", "device", "device", "device" };
     static const size_t kind_sizes[8] = { 6, 6, 6, 6, 6, 6, 6, 6 };
     args->memory_kinds = kinds;
@@ -577,7 +579,9 @@ PJRT_Error* Impl_PJRT_LoadedExecutable_Execute(PJRT_LoadedExecutable_Execute_Arg
       argument_handles = args->argument_lists[0];
     }
 
-    auto result_bufs = args->executable->impl->Execute(argument_handles, num_args);
+    auto exec_result = args->executable->impl->Execute(argument_handles, num_args);
+    auto& result_bufs = exec_result.first;
+    auto& exec_event = exec_result.second;
 
     if (args->output_lists) {
       size_t num_devs = args->num_devices > 0 ? args->num_devices : 1;
@@ -587,6 +591,15 @@ PJRT_Error* Impl_PJRT_LoadedExecutable_Execute(PJRT_LoadedExecutable_Execute_Arg
             args->output_lists[d][i] = result_bufs[i];
           }
         }
+      }
+    }
+
+    if (args->device_complete_events) {
+      size_t num_devs = args->num_devices > 0 ? args->num_devices : 1;
+      for (size_t d = 0; d < num_devs; ++d) {
+        PJRT_Event* evt = new PJRT_Event();
+        evt->impl = std::make_unique<vulkan_pjrt::VulkanEventImpl>(args->executable->impl->device, exec_event);
+        args->device_complete_events[d] = evt;
       }
     }
 

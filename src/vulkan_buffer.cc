@@ -71,7 +71,7 @@ VulkanBufferImpl::VulkanBufferImpl(const VulkanDevice* dev, PJRT_Buffer_Type typ
       size_in_bytes,
       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-      vk_buffer, vk_memory);
+      vk_buffer, vk_memory, vk_memory_offset, allocated_size);
 }
 
 VulkanBufferImpl::~VulkanBufferImpl() {
@@ -80,7 +80,7 @@ VulkanBufferImpl::~VulkanBufferImpl() {
       vkDestroyBuffer(device->device, vk_buffer, nullptr);
     }
     if (vk_memory != VK_NULL_HANDLE) {
-      vkFreeMemory(device->device, vk_memory, nullptr);
+      device->FreeMemory(vk_memory, vk_memory_offset, allocated_size);
     }
   }
 }
@@ -90,7 +90,7 @@ void VulkanBufferImpl::CopyFromHost(const void* host_data, size_t host_size_byte
   size_t copy_size = std::min(size_in_bytes, host_size_bytes);
 
   void* mapped = nullptr;
-  if (vkMapMemory(device->device, vk_memory, 0, copy_size, 0, &mapped) == VK_SUCCESS) {
+  if (vkMapMemory(device->device, vk_memory, vk_memory_offset, copy_size, 0, &mapped) == VK_SUCCESS) {
     std::memcpy(mapped, host_data, copy_size);
     vkUnmapMemory(device->device, vk_memory);
   }
@@ -101,7 +101,7 @@ void VulkanBufferImpl::CopyToHost(void* host_data, size_t host_size_bytes) const
   size_t copy_size = std::min(size_in_bytes, host_size_bytes);
 
   void* mapped = nullptr;
-  if (vkMapMemory(device->device, vk_memory, 0, copy_size, 0, &mapped) == VK_SUCCESS) {
+  if (vkMapMemory(device->device, vk_memory, vk_memory_offset, copy_size, 0, &mapped) == VK_SUCCESS) {
     std::memcpy(host_data, mapped, copy_size);
     vkUnmapMemory(device->device, vk_memory);
   }

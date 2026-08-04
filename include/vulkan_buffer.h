@@ -20,11 +20,13 @@ class VulkanBufferImpl {
   PJRT_Memory* memory_ptr{nullptr};
   VkBuffer vk_buffer{VK_NULL_HANDLE};
   VkDeviceMemory vk_memory{VK_NULL_HANDLE};
+  VkDeviceSize vk_memory_offset{0};
 
   PJRT_Buffer_Type element_type{PJRT_Buffer_Type_F32};
   std::vector<int64_t> dims;
   std::vector<int64_t> byte_strides;
   size_t size_in_bytes{0};
+  VkDeviceSize allocated_size{0};
 
   VulkanBufferImpl(const VulkanDevice* dev, PJRT_Buffer_Type type,
                    const int64_t* dimensions, size_t num_dims);

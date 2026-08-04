@@ -21,7 +21,9 @@ add_library(vulkan_pjrt SHARED
   src/pjrt_c_api.cc
 )
 
-target_link_libraries(vulkan_pjrt PRIVATE ${Vulkan_LIBRARIES} pthread)
+add_subdirectory(../dialectiny dialectiny)
+target_include_directories(vulkan_pjrt PRIVATE include)
+target_link_libraries(vulkan_pjrt PRIVATE ${Vulkan_LIBRARIES} pthread dialectiny)
 
 set_target_properties(vulkan_pjrt PROPERTIES
   PREFIX "lib"

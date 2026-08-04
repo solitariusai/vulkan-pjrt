@@ -6,10 +6,16 @@
 #include <string>
 #include <memory>
 #include <mutex>
+#include <unordered_map>
 #include <stdexcept>
 #include <iostream>
 
 namespace vulkan_pjrt {
+
+struct AsyncExecution {
+  VkFence fence{VK_NULL_HANDLE};
+  VkCommandBuffer command_buffer{VK_NULL_HANDLE};
+};
 
 class VulkanDevice {
  public:
@@ -25,6 +31,21 @@ class VulkanDevice {
   uint32_t device_id{0};
   int id{0};
 
+  mutable std::mutex pool_mutex;
+  
+  struct Chunk {
+      VkDeviceSize offset;
+      VkDeviceSize size;
+      bool is_free;
+  };
+  struct PoolBlock {
+      VkDeviceMemory memory;
+      VkDeviceSize total_size;
+      uint32_t memory_type_index;
+      std::vector<Chunk> chunks;
+  };
+  mutable std::vector<PoolBlock> pool_blocks;
+
   VulkanDevice();
   ~VulkanDevice();
 
@@ -33,12 +54,15 @@ class VulkanDevice {
 
   void CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                     VkMemoryPropertyFlags properties, VkBuffer& buffer,
-                    VkDeviceMemory& buffer_memory) const;
+                    VkDeviceMemory& buffer_memory, VkDeviceSize& memory_offset, VkDeviceSize& allocated_size) const;
+
+  void FreeMemory(VkDeviceMemory memory, VkDeviceSize memory_offset, VkDeviceSize allocated_size) const;
 
   void CopyBuffer(VkBuffer src_buffer, VkBuffer dst_buffer, VkDeviceSize size) const;
 
   VkCommandBuffer BeginSingleTimeCommands() const;
   void EndSingleTimeCommands(VkCommandBuffer command_buffer) const;
+  AsyncExecution AsyncEndSingleTimeCommands(VkCommandBuffer command_buffer) const;
 };
 
 }  // namespace vulkan_pjrt

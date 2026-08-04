@@ -10,6 +10,14 @@ VulkanDevice::VulkanDevice() {}
 VulkanDevice::~VulkanDevice() {
   if (device != VK_NULL_HANDLE) {
     vkDeviceWaitIdle(device);
+    
+    for (auto& block : pool_blocks) {
+      if (block.memory != VK_NULL_HANDLE) {
+        vkFreeMemory(device, block.memory, nullptr);
+      }
+    }
+    pool_blocks.clear();
+
     if (command_pool != VK_NULL_HANDLE) {
       vkDestroyCommandPool(device, command_pool, nullptr);
     }
@@ -110,6 +118,7 @@ void VulkanDevice::Initialize(int device_index) {
   pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
   pool_info.queueFamilyIndex = compute_queue_family_index;
 
+
   if (vkCreateCommandPool(device, &pool_info, nullptr, &command_pool) != VK_SUCCESS) {
     throw std::runtime_error("Failed to create Vulkan command pool!");
   }
@@ -135,7 +144,7 @@ uint32_t VulkanDevice::FindMemoryType(uint32_t type_filter, VkMemoryPropertyFlag
 
 void VulkanDevice::CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                                 VkMemoryPropertyFlags properties, VkBuffer& buffer,
-                                VkDeviceMemory& buffer_memory) const {
+                                VkDeviceMemory& buffer_memory, VkDeviceSize& memory_offset, VkDeviceSize& allocated_size) const {
   VkBufferCreateInfo buffer_info{};
   buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
   buffer_info.size = size > 0 ? size : 4; // Ensure non-zero size
@@ -148,18 +157,73 @@ void VulkanDevice::CreateBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
 
   VkMemoryRequirements mem_reqs;
   vkGetBufferMemoryRequirements(device, buffer, &mem_reqs);
+  
+  VkDeviceSize alignment = std::max(mem_reqs.alignment, (VkDeviceSize)256);
+  allocated_size = (mem_reqs.size + alignment - 1) / alignment * alignment;
+  
+  uint32_t mem_type = FindMemoryType(mem_reqs.memoryTypeBits, properties);
 
-  VkMemoryAllocateInfo alloc_info{};
-  alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-  alloc_info.allocationSize = mem_reqs.size;
-  alloc_info.memoryTypeIndex = FindMemoryType(mem_reqs.memoryTypeBits, properties);
-
-  if (vkAllocateMemory(device, &alloc_info, nullptr, &buffer_memory) != VK_SUCCESS) {
-    vkDestroyBuffer(device, buffer, nullptr);
-    throw std::runtime_error("Failed to allocate VkDeviceMemory!");
+  std::lock_guard<std::mutex> lock(pool_mutex);
+  for (auto& block : pool_blocks) {
+    if (block.memory_type_index == mem_type) {
+      for (size_t i = 0; i < block.chunks.size(); ++i) {
+        if (block.chunks[i].is_free && block.chunks[i].size >= allocated_size) {
+          if (block.chunks[i].size > allocated_size) {
+            block.chunks.push_back({block.chunks[i].offset + allocated_size, block.chunks[i].size - allocated_size, true});
+            block.chunks[i].size = allocated_size;
+          }
+          block.chunks[i].is_free = false;
+          buffer_memory = block.memory;
+          memory_offset = block.chunks[i].offset;
+          vkBindBufferMemory(device, buffer, buffer_memory, memory_offset);
+          return;
+        }
+      }
+    }
   }
 
-  vkBindBufferMemory(device, buffer, buffer_memory, 0);
+  VkDeviceSize block_size = std::max((VkDeviceSize)64 * 1024 * 1024, allocated_size);
+  VkMemoryAllocateInfo alloc_info{};
+  alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+  alloc_info.allocationSize = block_size;
+  alloc_info.memoryTypeIndex = mem_type;
+
+  std::cout << "[Vulkan Memory Pool] Allocating new block of size: " << block_size << "\n";
+  VkDeviceMemory new_memory;
+  if (vkAllocateMemory(device, &alloc_info, nullptr, &new_memory) != VK_SUCCESS) {
+    vkDestroyBuffer(device, buffer, nullptr);
+    throw std::runtime_error("Failed to allocate pool VkDeviceMemory!");
+  }
+
+  PoolBlock new_block;
+  new_block.memory = new_memory;
+  new_block.total_size = block_size;
+  new_block.memory_type_index = mem_type;
+  
+  new_block.chunks.push_back({0, allocated_size, false});
+  if (block_size > allocated_size) {
+    new_block.chunks.push_back({allocated_size, block_size - allocated_size, true});
+  }
+  
+  pool_blocks.push_back(new_block);
+  buffer_memory = new_memory;
+  memory_offset = 0;
+  vkBindBufferMemory(device, buffer, buffer_memory, memory_offset);
+}
+
+void VulkanDevice::FreeMemory(VkDeviceMemory memory, VkDeviceSize memory_offset, VkDeviceSize allocated_size) const {
+  if (memory == VK_NULL_HANDLE) return;
+  std::lock_guard<std::mutex> lock(pool_mutex);
+  for (auto& block : pool_blocks) {
+    if (block.memory == memory) {
+      for (auto& chunk : block.chunks) {
+        if (chunk.offset == memory_offset) {
+          chunk.is_free = true;
+          return;
+        }
+      }
+    }
+  }
 }
 
 VkCommandBuffer VulkanDevice::BeginSingleTimeCommands() const {
@@ -198,6 +262,27 @@ void VulkanDevice::EndSingleTimeCommands(VkCommandBuffer command_buffer) const {
 
   vkDestroyFence(device, fence, nullptr);
   vkFreeCommandBuffers(device, command_pool, 1, &command_buffer);
+}
+
+AsyncExecution VulkanDevice::AsyncEndSingleTimeCommands(VkCommandBuffer command_buffer) const {
+  vkEndCommandBuffer(command_buffer);
+
+  VkSubmitInfo submit_info{};
+  submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit_info.commandBufferCount = 1;
+  submit_info.pCommandBuffers = &command_buffer;
+
+  VkFenceCreateInfo fence_info{};
+  fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+  VkFence fence;
+  vkCreateFence(device, &fence_info, nullptr, &fence);
+
+  vkQueueSubmit(compute_queue, 1, &submit_info, fence);
+
+  AsyncExecution exec;
+  exec.fence = fence;
+  exec.command_buffer = command_buffer;
+  return exec;
 }
 
 void VulkanDevice::CopyBuffer(VkBuffer src_buffer, VkBuffer dst_buffer, VkDeviceSize size) const {

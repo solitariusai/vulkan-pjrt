@@ -69,10 +69,15 @@ std::string ShaderCompiler::GenerateComputeShader(const OpSpec& spec, size_t num
   ss << "  uint K;\n";
   ss << "} pc;\n\n";
 
-  if (spec.op_type == "matmul" || spec.op_type == "matmul_add" || spec.op_type == "matmul_fused") {
+  if (spec.op_type.find("matmul") != std::string::npos) {
+    ss << "layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;\n\n";
+    ss << "#define TILE_M 32\n";
+    ss << "#define TILE_N 32\n";
+    ss << "#define TILE_K 16\n\n";
+    ss << "shared " << glsl_type << " Asub[TILE_M][TILE_K];\n";
+    ss << "shared " << glsl_type << " Bsub[TILE_K][TILE_N];\n\n";
+  } else if (spec.op_type == "transpose") {
     ss << "layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;\n\n";
-    ss << "shared " << glsl_type << " Asub[16][16];\n";
-    ss << "shared " << glsl_type << " Bsub[16][16];\n\n";
   } else {
     ss << "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;\n\n";
   }
@@ -87,57 +92,121 @@ std::string ShaderCompiler::GenerateComputeShader(const OpSpec& spec, size_t num
 
   ss << "\nvoid main() {\n";
 
-  if (spec.op_type == "matmul" || spec.op_type == "matmul_add" || spec.op_type == "matmul_fused") {
+  if (spec.op_type.find("matmul") != std::string::npos) {
     ss << "  uint M = pc.M;\n";
     ss << "  uint N = pc.N;\n";
     ss << "  uint K = pc.K;\n\n";
-    ss << "  uint row = gl_GlobalInvocationID.y;\n";
-    ss << "  uint col = gl_GlobalInvocationID.x;\n";
-    ss << "  uint local_row = gl_LocalInvocationID.y;\n";
-    ss << "  uint local_col = gl_LocalInvocationID.x;\n\n";
-    ss << "  " << glsl_type << " sum = " << glsl_type << "(0.0);\n";
-    ss << "  uint num_tiles = (K + 15) / 16;\n\n";
+    ss << "  uint row_block = gl_WorkGroupID.y * TILE_M;\n";
+    ss << "  uint col_block = gl_WorkGroupID.x * TILE_N;\n";
+    ss << "  uint local_row = gl_LocalInvocationID.y * 4;\n";
+    ss << "  uint local_col = gl_LocalInvocationID.x * 4;\n";
+    ss << "  uint flat_id = gl_LocalInvocationIndex;\n\n";
+    
+    ss << "  " << glsl_type << " acc[4][4];\n";
+    ss << "  for (int i = 0; i < 4; ++i)\n";
+    ss << "    for (int j = 0; j < 4; ++j)\n";
+    ss << "      acc[i][j] = " << glsl_type << "(0.0);\n\n";
+    
+    ss << "  uint num_tiles = (K + TILE_K - 1) / TILE_K;\n\n";
     ss << "  for (uint t = 0; t < num_tiles; ++t) {\n";
-    ss << "    uint tiled_col = t * 16 + local_col;\n";
-    ss << "    if (row < M && tiled_col < K) {\n";
-    ss << "      Asub[local_row][local_col] = in0[row * K + tiled_col];\n";
-    ss << "    } else {\n";
-    ss << "      Asub[local_row][local_col] = " << glsl_type << "(0.0);\n";
-    ss << "    }\n\n";
-    ss << "    uint tiled_row = t * 16 + local_row;\n";
-    ss << "    if (tiled_row < K && col < N) {\n";
-    ss << "      Bsub[local_row][local_col] = in1[tiled_row * N + col];\n";
-    ss << "    } else {\n";
-    ss << "      Bsub[local_row][local_col] = " << glsl_type << "(0.0);\n";
-    ss << "    }\n\n";
+    ss << "    for (uint i = 0; i < 8; ++i) {\n";
+    ss << "      uint idx = flat_id * 8 + i;\n";
+    ss << "      uint a_row = idx / TILE_K;\n";
+    ss << "      uint a_col = idx % TILE_K;\n";
+    ss << "      uint global_a_row = row_block + a_row;\n";
+    ss << "      uint global_a_col = t * TILE_K + a_col;\n";
+    if (spec.op_type == "matmul_trans_a") {
+      ss << "      if (global_a_col < M && global_a_row < K)\n";
+      ss << "        Asub[a_row][a_col] = in0[global_a_col * K + global_a_row];\n";
+    } else {
+      ss << "      if (global_a_row < M && global_a_col < K)\n";
+      ss << "        Asub[a_row][a_col] = in0[global_a_row * K + global_a_col];\n";
+    }
+    ss << "      else\n";
+    ss << "        Asub[a_row][a_col] = " << glsl_type << "(0.0);\n";
+    ss << "    }\n";
+    ss << "    for (uint i = 0; i < 8; ++i) {\n";
+    ss << "      uint idx = flat_id * 8 + i;\n";
+    ss << "      uint b_row = idx / TILE_N;\n";
+    ss << "      uint b_col = idx % TILE_N;\n";
+    ss << "      uint global_b_row = t * TILE_K + b_row;\n";
+    ss << "      uint global_b_col = col_block + b_col;\n";
+    if (spec.op_type == "matmul_trans_b") {
+      ss << "      if (global_b_col < K && global_b_row < N)\n";
+      ss << "        Bsub[b_row][b_col] = in1[global_b_col * N + global_b_row];\n";
+    } else {
+      ss << "      if (global_b_row < K && global_b_col < N)\n";
+      ss << "        Bsub[b_row][b_col] = in1[global_b_row * N + global_b_col];\n";
+    }
+    ss << "      else\n";
+    ss << "        Bsub[b_row][b_col] = " << glsl_type << "(0.0);\n";
+    ss << "    }\n";
     ss << "    barrier();\n\n";
-    ss << "    for (uint k = 0; k < 16; ++k) {\n";
-    ss << "      sum += Asub[local_row][k] * Bsub[k][local_col];\n";
+    
+    ss << "    for (uint k = 0; k < TILE_K; ++k) {\n";
+    ss << "      " << glsl_type << " a_reg[4];\n";
+    ss << "      " << glsl_type << " b_reg[4];\n";
+    ss << "      for (int i = 0; i < 4; ++i) a_reg[i] = Asub[local_row + i][k];\n";
+    ss << "      for (int j = 0; j < 4; ++j) b_reg[j] = Bsub[k][local_col + j];\n";
+    ss << "      for (int i = 0; i < 4; ++i) {\n";
+    ss << "        for (int j = 0; j < 4; ++j) {\n";
+    ss << "          acc[i][j] += a_reg[i] * b_reg[j];\n";
+    ss << "        }\n";
+    ss << "      }\n";
     ss << "    }\n";
     ss << "    barrier();\n";
     ss << "  }\n\n";
-    ss << "  if (row < M && col < N) {\n";
+    
+    ss << "  for (int i = 0; i < 4; ++i) {\n";
+    ss << "    for (int j = 0; j < 4; ++j) {\n";
+    ss << "      uint global_row = row_block + local_row + i;\n";
+    ss << "      uint global_col = col_block + local_col + j;\n";
+    ss << "      if (global_row < M && global_col < N) {\n";
+    
     if (spec.op_type == "matmul_fused") {
-      ss << "    " << glsl_type << " acc = sum;\n";
+      ss << "        " << glsl_type << " val = acc[i][j];\n";
       size_t extra_in_idx = 2;
       for (const std::string& ep_op : spec.epilogue_ops) {
         if (ep_op == "add") {
-          ss << "    acc = acc + in" << extra_in_idx++ << "[col];\n";
+          ss << "        val = val + in" << extra_in_idx++ << "[global_col];\n";
         } else if (ep_op == "mul") {
-          ss << "    acc = acc * in" << extra_in_idx++ << "[col];\n";
+          ss << "        val = val * in" << extra_in_idx++ << "[global_col];\n";
         } else if (ep_op == "relu") {
-          ss << "    acc = max(acc, " << glsl_type << "(0.0));\n";
+          ss << "        val = max(val, " << glsl_type << "(0.0));\n";
         }
       }
-      ss << "    out0[row * N + col] = acc;\n";
+      ss << "        out0[global_row * N + global_col] = val;\n";
     } else if (spec.op_type == "matmul_add") {
-      ss << "    out0[row * N + col] = sum + in2[col];\n";
+      ss << "        out0[global_row * N + global_col] = acc[i][j] + in2[global_col];\n";
     } else {
-      ss << "    out0[row * N + col] = sum;\n";
+      ss << "        out0[global_row * N + global_col] = acc[i][j];\n";
     }
+    
+    ss << "      }\n";
+    ss << "    }\n";
+    ss << "  }\n";
+  } else if (spec.op_type == "transpose") {
+    ss << "  uint row = gl_GlobalInvocationID.y;\n";
+    ss << "  uint col = gl_GlobalInvocationID.x;\n";
+    ss << "  uint M = pc.M;\n";
+    ss << "  uint N = pc.N;\n";
+    ss << "  if (row < M && col < N) {\n";
+    ss << "    out0[col * M + row] = in0[row * N + col];\n";
+    ss << "  }\n";
+  } else if (spec.op_type == "reduce_sum") {
+    ss << "  uint col = gl_GlobalInvocationID.x;\n";
+    ss << "  uint M = pc.M;\n";
+    ss << "  uint N = pc.N;\n";
+    ss << "  if (col < N) {\n";
+    ss << "    " << glsl_type << " sum = " << glsl_type << "(0.0);\n";
+    ss << "    for (uint i = 0; i < M; ++i) {\n";
+    ss << "      sum += in0[i * N + col];\n";
+    ss << "    }\n";
+    ss << "    out0[col] = sum;\n";
     ss << "  }\n";
   } else {
     ss << "  uint g_id = gl_GlobalInvocationID.x;\n";
+    ss << "  if (g_id >= pc.M) return;\n";
     if (spec.op_type == "add") {
       ss << "  out0[g_id] = in0[g_id] + in1[g_id];\n";
     } else if (spec.op_type == "sub") {
@@ -166,6 +235,26 @@ std::string ShaderCompiler::GenerateComputeShader(const OpSpec& spec, size_t num
       ss << "  out0[g_id] = in0[g_id] * " << glsl_type << "(" << spec.scalar_val << ");\n";
     } else if (spec.op_type == "copy") {
       ss << "  out0[g_id] = in0[g_id];\n";
+    } else if (spec.op_type == "elementwise_fused") {
+      ss << "  " << glsl_type << " acc = in0[g_id];\n";
+      size_t in_idx = 1;
+      for (size_t i = 1; i < spec.epilogue_ops.size(); ++i) {
+        const std::string& ep = spec.epilogue_ops[i];
+        if (ep == "add") {
+          ss << "  acc = acc + in" << in_idx++ << "[g_id];\n";
+        } else if (ep == "sub") {
+          ss << "  acc = acc - in" << in_idx++ << "[g_id];\n";
+        } else if (ep == "mul") {
+          ss << "  acc = acc * in" << in_idx++ << "[g_id];\n";
+        } else if (ep == "div") {
+          ss << "  acc = acc / in" << in_idx++ << "[g_id];\n";
+        } else if (ep == "relu") {
+          ss << "  acc = max(acc, " << glsl_type << "(0.0));\n";
+        } else if (ep == "scale") {
+          ss << "  acc = acc * " << glsl_type << "(" << spec.scalar_val << ");\n";
+        }
+      }
+      ss << "  out0[g_id] = acc;\n";
     } else {
       ss << "  out0[g_id] = in0[g_id] + in1[g_id];\n";
     }
